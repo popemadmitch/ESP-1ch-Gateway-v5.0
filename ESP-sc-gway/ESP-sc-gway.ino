@@ -49,7 +49,6 @@
 #include <WiFiUdp.h>
 #include <pins_arduino.h>
 #include <gBase64.h>							// https://github.com/adamvr/arduino-base64 (changed the name)
-
 // Local include files
 #include "loraModem.h"
 #include "loraFiles.h"
@@ -73,7 +72,7 @@ extern "C" {
 #if ESP32_ARCH==1								// IF ESP32
 
 #include "WiFi.h"
-#include <WiFIClient.h>
+#include <WiFiClient.h>
 #include <ESPmDNS.h>
 #include <SPIFFS.h>
 #if A_SERVER==1
@@ -84,7 +83,7 @@ extern "C" {
 #else
 
 #include <ESP8266WiFi.h>						// Which is specific for ESP8266
-#include <ESP8266mDNS.h>
+#include <ESP8266.h>
 extern "C" {
 #include "user_interface.h"
 #include "c_types.h"
@@ -1423,6 +1422,13 @@ void setup() {
 #if A_SERVER==1	
 	// Setup the webserver
 	setupWWW();
+
+  if (!MDNS.begin("loragw")) {
+    Serial.println("Error setting up MDNS responder.");
+  } else {
+    MDNS.addService("http", "tcp", 80);
+  }
+
 #endif
 
 	delay(100);												// Wait after setup
@@ -1538,6 +1544,8 @@ void loop ()
 	server.handleClient();
 #endif
 
+  display_time();
+  
 #if A_OTA==1
 	// Perform Over the Air (OTA) update if enabled and requested by user.
 	// It is important to put this function at the start of loop() as it is

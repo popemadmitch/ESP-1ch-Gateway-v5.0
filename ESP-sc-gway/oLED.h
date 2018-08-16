@@ -28,7 +28,7 @@
 
 #if OLED>=1
 
-#define OLED_SCL 5								// GPIO5 / D1
+#define OLED_SCL 15								// GPIO5 / D1
 #define OLED_SDA 4								// GPIO4 / D2
 
 #if OLED==1
@@ -43,5 +43,18 @@ SSD1306  display(OLED_ADDR, OLED_SDA, OLED_SCL);// i2c ADDR & SDA, SCL on wemos
 #define OLED_ADDR 0x3C							// Default 0x3C for 1.3" SH1106
 SH1106  display(OLED_ADDR, OLED_SDA, OLED_SCL);	// i2c ADDR & SDA, SCL on wemos
 #endif
+
+
+#if OLED==3
+#include <U8x8lib.h>
+#ifdef BOARD_TTGO
+U8X8_SSD1306_128X64_NONAME_SW_I2C u8x8(/* clock=*/ 22, /* data=*/ 21);
+
+#endif
+#ifdef BOARD_HELTEC
+U8X8_SSD1306_128X64_NONAME_SW_I2C u8x8(/* clock=*/ 15, /* data=*/ 4, /* reset=*/ 16);
+#endif
+#endif
+
 
 #endif//OLED>=1

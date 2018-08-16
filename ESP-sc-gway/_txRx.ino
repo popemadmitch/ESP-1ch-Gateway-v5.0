@@ -198,6 +198,8 @@ int sendPacket(uint8_t *buf, uint8_t length)
 #endif
 	cp_up_pkt_fwd++;
 
+  oled_stats();
+  
 #if DUSB>=1
 	Serial.println(F("sendPacket:: fini OK"));
 #endif // DISB
@@ -341,7 +343,18 @@ int buildPacket(uint32_t tmst, uint8_t *buff_up, struct LoraUp LoraUp, bool inte
 #endif // DUSB
 
 // Show received message status on OLED display
-#if OLED>=1
+#if OLED==3
+    u8x8.setCursor(0, 3);
+    u8x8.printf("RX@ %02i:%02i:%02i", hour(), minute(), second());
+    u8x8.setCursor(0, 4);
+    u8x8.printf("RSSI:%d SNR:%d", prssi-rssicorr, SNR);
+    u8x8.setCursor(0, 5);
+    u8x8.printf("Addr: %02X%02X%02X%02X", message[4], message[3], message[2], message[1]);
+    u8x8.setCursor(0, 6);
+    u8x8.printf("Len: %d bytes", messageLength);
+    oled_stats();
+
+#elif OLED>=1
     char timBuff[20];
     sprintf(timBuff, "%02i:%02i:%02i", hour(), minute(), second());
 	
