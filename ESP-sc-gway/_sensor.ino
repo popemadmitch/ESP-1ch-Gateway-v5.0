@@ -1,7 +1,7 @@
-// 1-channel LoRa Gateway for ESP8266
+// sensor.ino; 1-channel LoRa Gateway for ESP8266
 // Copyright (c) 2016, 2017, 2018 Maarten Westenberg
-// Verison 5.2.0
-// Date: 2018-05-30
+// Verison 5.3.2
+// Date: 2018-07-07
 //
 // All rights reserved. This program and the accompanying materials
 // are made available under the terms of the MIT License
@@ -16,25 +16,37 @@
 // Please specify the DevAddr and the AppSKey below (and on your LoRa backend).
 // Also you will have to choose what sensors to forward to your application.
 //
+// Note: disable sensors not used in ESP-sc-gway.h
+//	- The GPS is included on TTGO T-Beam ESP32 boards by default.
+//	- The battery sensor works by connecting the VCC pin to A0 analog port
 // ============================================================================
-		
+	
 #if GATEWAYNODE==1
+
+#include "LoRaCode.h"
 
 unsigned char DevAddr[4]  = _DEVADDR ;				// see ESP-sc-gway.h
 
 
+// Only used by GPS sensor code
+#if _GPS==1
 // ----------------------------------------------------------------------------
-// XXX Experimental Read Internal Sensors
-//
-// You can monitor some settings of the RFM95/sx1276 chip. For example the temperature
-// which is set in REGTEMP in FSK mode (not in LORA). Or the battery value.
-// Find some sensible sensor values for LoRa radio and read them below in separate function
-//
+// Smartdelay is a function to delay processing but in the loop get info 
+// from the GPS device
 // ----------------------------------------------------------------------------
-//uint8_t readInternal(uint8_t reg) {
-//
-//	return 0;
-//}
+static void smartDelay(unsigned long ms)                
+{
+  unsigned long start = millis();
+  do
+  {
+    while (Serial1.available())
+      gps.encode(Serial1.read());
+  } while (millis() - start < ms);
+}
+#endif //_GPS
+
+
+
 
 
 // ----------------------------------------------------------------------------
@@ -46,25 +58,100 @@ unsigned char DevAddr[4]  = _DEVADDR ;				// see ESP-sc-gway.h
 // of-course you can add any byte string you wish
 //
 // Parameters: 
-//	- buf: contains the buffer to put the sensor values in
+//	- buf: contains the buffer to put the sensor values in (max==xx);
 // Returns:
-//	- The amount of sensor characters put in the buffer 
+//	- The amount of sensor characters put in the buffer
+//
+// NOTE: The code in LoRaSensors() is provided as an example only.
+//	The amount of sensor values as well as their message layout may differ
+//	for each implementation.
+//	Also, the message format used by this gateway is LoraCode, a message format
+//	developed by me for sensor values. Each value is uniquely coded with an
+//	id and a value, and the total message contains its length (less than 64 bytes)
+//	and a parity value in byte[0] bit 7.
 // ----------------------------------------------------------------------------
 static int LoRaSensors(uint8_t *buf) {
-
-	uint8_t internalSersors;
-	//internalSersors = readInternal(0x1A);
-	//if (internalSersors > 0) {		
-	//	return (internalSersors);
-	//}
 	
-	
+	uint8_t tchars = 1;
 	buf[0] = 0x86;									// 134; User code <lCode + len==3 + Parity
-	buf[1] = 0x80;									// 128; lCode code <battery>
-	buf[2] = 0x3F;									//  63; lCode code <value>
-	// Parity = buf[0]==1 buf[1]=1 buf[2]=0 ==> even, so last bit of first byte must be 0
+
+#if DUSB>=1
+	if (debug>=0)
+		Serial.print(F("LoRaSensors:: "));
+#endif
+
+#if _BATTERY==1
+#if DUSB>=1
+	if (debug>=0)
+		Serial.print(F("Battery "));
+#endif
+#if defined(ARDUINO_ARCH_ESP8266) || defined(ESP32)
+	// For ESP there is no standard battery library
+	// What we do is to measure GPIO35 pin which has a 100K voltage divider
+	pinMode(35, INPUT);
+#if defined(ESP32)
+	int devider=4095;
+#else
+	int devider=1023;
+#endif //ESP32
+	float volts=3.3 * analogRead(35) / 4095 * 2;	// T_Beam connects to GPIO35
+#else
+	// For ESP8266 no sensor defined
+	float volts=0;
+#endif
+	tchars += lcode.eBattery(volts, buf + tchars);
+#endif
+
+#if _GPS==1
+#if DUSB>=1
+	if (debug>=0)
+		Serial.print(F("GPS "));
+
+	if (( debug>=1 ) && ( pdebug & P_MAIN )) {
+		Serial.print("\tLatitude  : ");
+		Serial.println(gps.location.lat(), 5);
+		Serial.print("\tLongitude : ");
+		Serial.println(gps.location.lng(), 4);
+		Serial.print("\tSatellites: ");
+		Serial.println(gps.satellites.value());
+		Serial.print("\tAltitude  : ");
+		Serial.print(gps.altitude.feet() / 3.2808);
+		Serial.println("M");
+		Serial.print("\tTime      : ");
+		Serial.print(gps.time.hour());
+		Serial.print(":");
+		Serial.print(gps.time.minute());
+		Serial.print(":");
+		Serial.println(gps.time.second());
+	}
+#endif
+
+	smartDelay(1000);
 	
-	return(3);	// return the number of bytes added to payload
+	if (millis() > 5000 && gps.charsProcessed() < 10) {
+#if DUSB>=1
+		Serial.println(F("No GPS data received: check wiring"));
+#endif
+		return(0);
+	}
+	
+	// Assuming we have a value, put it in the buf
+	// The layout of this message is specific to the user,
+	// so adapt as needed.
+	tchars += lcode.eGpsL(gps.location.lat(), gps.location.lng(), gps.altitude.value(),
+                       gps.satellites.value(), buf + tchars);
+
+#endif
+
+#if DUSB>=1
+	if (debug>=0)
+		Serial.println();
+#endif
+
+	// If all sensor data is encoded, we encode the buffer	
+	lcode.eMsg(buf, tchars);								// Fill byte 0 with bytecount and Parity
+	
+	return(tchars);	// return the number of bytes added to payload
 }
 
 
@@ -133,80 +220,6 @@ static void generate_subkey(uint8_t *key, uint8_t *k1, uint8_t *k2) {
 
 
 // ----------------------------------------------------------------------------
-// ENCODEPACKET
-// In Sensor mode, we have to encode the user payload before sending.
-// The library files for AES are added to the library directory in AES.
-// For the moment we use the AES library made by ideetron as this library
-// is also used in the LMIC stack and is small in size.
-//
-// The function below follows the LoRa spec exactly.
-//
-// The resulting mumber of Bytes is returned by the functions. This means
-// 16 bytes per block, and as we add to the last block we also return 16
-// bytes for the last block.
-//
-// The LMIC code does not do this, so maybe we shorten the last block to only
-// the meaningful bytes in the last block. This means that encoded buffer
-// is exactly as big as the original message.
-//
-// NOTE:: Be aware that the LICENSE of the used AES library files 
-//	that we call with AES_Encrypt() is GPL3. It is used as-is,
-//  but not part of this code.
-//
-// cmac = aes128_encrypt(K, Block_A[i])
-// ----------------------------------------------------------------------------
-uint8_t encodePacket(uint8_t *Data, uint8_t DataLength, uint16_t FrameCount, uint8_t Direction) {
-
-	unsigned char AppSKey[16] = _APPSKEY ;	// see ESP-sc-gway.h
-	uint8_t i, j;
-	uint8_t Block_A[16];
-	uint8_t bLen=16;						// Block length is 16 except for last block in message
-		
-	uint8_t restLength = DataLength % 16;	// We work in blocks of 16 bytes, this is the rest
-	uint8_t numBlocks  = DataLength / 16;	// Number of whole blocks to encrypt
-	if (restLength>0) numBlocks++;			// And add block for the rest if any
-
-	for(i = 1; i <= numBlocks; i++) {
-		Block_A[0] = 0x01;
-		
-		Block_A[1] = 0x00; 
-		Block_A[2] = 0x00; 
-		Block_A[3] = 0x00; 
-		Block_A[4] = 0x00;
-
-		Block_A[5] = Direction;				// 0 is uplink
-
-		Block_A[6] = DevAddr[3];			// Only works for and with ABP
-		Block_A[7] = DevAddr[2];
-		Block_A[8] = DevAddr[1];
-		Block_A[9] = DevAddr[0];
-
-		Block_A[10] = (FrameCount & 0x00FF);
-		Block_A[11] = ((FrameCount >> 8) & 0x00FF);
-		Block_A[12] = 0x00; 				// Frame counter upper Bytes
-		Block_A[13] = 0x00;					// These are not used so are 0
-
-		Block_A[14] = 0x00;
-
-		Block_A[15] = i;
-
-		// Encrypt and calculate the S
-		AES_Encrypt(Block_A, AppSKey);
-		
-		// Last block? set bLen to rest
-		if ((i == numBlocks) && (restLength>0)) bLen = restLength;
-		
-		for(j = 0; j < bLen; j++) {
-			*Data = *Data ^ Block_A[j];
-			Data++;
-		}
-	}
-	//return(numBlocks*16);			// Do we really want to return all 16 bytes in lastblock
-	return(DataLength);				// or only 16*(numBlocks-1)+bLen;
-}
-
-
-// ----------------------------------------------------------------------------
 // MICPACKET()
 // Provide a valid MIC 4-byte code (par 2.4 of spec, RFC4493)
 // 		see also https://tools.ietf.org/html/rfc4493
@@ -228,10 +241,10 @@ uint8_t encodePacket(uint8_t *Data, uint8_t DataLength, uint16_t FrameCount, uin
 // MIC is cmac [0:3] of ( aes128_cmac(NwkSKey, B0 | Data )
 //
 // ----------------------------------------------------------------------------
-uint8_t micPacket(uint8_t *data, uint8_t len, uint16_t FrameCount, uint8_t dir) {
+uint8_t micPacket(uint8_t *data, uint8_t len, uint16_t FrameCount, uint8_t * NwkSKey, uint8_t dir) {
 
 
-	unsigned char NwkSKey[16] = _NWKSKEY ;
+	//uint8_t NwkSKey[16] = _NWKSKEY;
 	uint8_t Block_B[16];
 	uint8_t X[16];
 	uint8_t Y[16];
@@ -305,7 +318,7 @@ uint8_t micPacket(uint8_t *data, uint8_t len, uint16_t FrameCount, uint8_t dir) 
 
 	// ------------------------------------
 	// Step 4: If there is a rest Block, padd it
-	// Last block. We move step4 to the end as we need Y
+	// Last block. We move step 4 to the end as we need Y
 	// to compute the last block
 	// 
 	if (restBits) {
@@ -350,6 +363,7 @@ uint8_t micPacket(uint8_t *data, uint8_t len, uint16_t FrameCount, uint8_t dir) 
 // ----------------------------------------------------------------------------
 static void checkMic(uint8_t *buf, uint8_t len, uint8_t *key) {
 	uint8_t cBuf[len+1];
+	uint8_t NwkSKey[16] = _NWKSKEY;
 	
 	if (debug>=2) {
 		Serial.print(F("old="));
@@ -363,7 +377,7 @@ static void checkMic(uint8_t *buf, uint8_t len, uint8_t *key) {
 	len -=4;
 	
 	uint16_t FrameCount = ( cBuf[7] * 256 ) + cBuf[6];
-	len += micPacket(cBuf, len, FrameCount, 0);
+	len += micPacket(cBuf, len, FrameCount, NwkSKey, 0);
 	
 	if (debug>=2) {
 		Serial.print(F("new="));
@@ -373,8 +387,9 @@ static void checkMic(uint8_t *buf, uint8_t len, uint8_t *key) {
 		}
 		Serial.println();
 	}
+	// Mic is only checked, but len is not corrected
 }
-#endif
+#endif //_CHECK_MIC
 
 // ----------------------------------------------------------------------------
 // SENSORPACKET
@@ -395,7 +410,7 @@ static void checkMic(uint8_t *buf, uint8_t len, uint8_t *key) {
 //					( MHDR | ( FHDR | FPORT | FRMPAYLOAD ) | MIC )
 //
 //	This function makes the totalpackage and calculates MIC
-// Te maximum size of the message is: 12 + ( 9 + 2 + 64 ) + 4	
+// The maximum size of the message is: 12 + ( 9 + 2 + 64 ) + 4	
 // So message size should be lass than 128 bytes if Payload is limited to 64 bytes.
 //
 // return value:
@@ -408,6 +423,16 @@ int sensorPacket() {
 	uint8_t message[64]={ 0 };							// Payload, init to 0
 	uint8_t mlength = 0;
 	uint32_t tmst = micros();
+	struct LoraUp LUP;
+	uint8_t NwkSKey[16] = _NWKSKEY;
+	uint8_t AppSKey[16] = _APPSKEY;
+	uint8_t DevAddr[4]  = _DEVADDR;
+	
+	// Init the other LoraUp fields
+	LUP.sf = 8;											// Send with SF8
+	LUP.prssi = -50;
+	LUP.rssicorr = 139;
+	LUP.snr = 0;
 	
 	// In the next few bytes the fake LoRa message must be put
 	// PHYPayload = MHDR | MACPAYLOAD | MIC
@@ -416,38 +441,61 @@ int sensorPacket() {
 	
 	// ------------------------------
 	// MHDR (Para 4.2), bit 5-7 MType, bit 2-4 RFU, bit 0-1 Major
-	message[0] = 0x40;									// MHDR 0x40 == unconfirmed up message,
+	LUP.payLoad[0] = 0x40;								// MHDR 0x40 == unconfirmed up message,
 														// FRU and major are 0
 	
 	// -------------------------------
 	// FHDR consists of 4 bytes addr, 1 byte Fctrl, 2 byte FCnt, 0-15 byte FOpts
 	// We support ABP addresses only for Gateways
-	message[1] = DevAddr[3];							// Last byte[3] of address
-	message[2] = DevAddr[2];
-	message[3] = DevAddr[1];
-	message[4] = DevAddr[0];							// First byte[0] of Dev_Addr
+	LUP.payLoad[1] = DevAddr[3];						// Last byte[3] of address
+	LUP.payLoad[2] = DevAddr[2];
+	LUP.payLoad[3] = DevAddr[1];
+	LUP.payLoad[4] = DevAddr[0];						// First byte[0] of Dev_Addr
 	
-	message[5] = 0x00;									// FCtrl is normally 0
-	message[6] = frameCount % 0x100;					// LSB
-	message[7] = frameCount / 0x100;					// MSB
+	LUP.payLoad[5] = 0x00;								// FCtrl is normally 0
+	LUP.payLoad[6] = frameCount % 0x100;				// LSB
+	LUP.payLoad[7] = frameCount / 0x100;				// MSB
 
 	// -------------------------------
 	// FPort, either 0 or 1 bytes. Must be != 0 for non MAC messages such as user payload
 	//
-	message[8] = 0x01;									// FPort must not be 0
-	mlength = 9;
+	LUP.payLoad[8] = 0x01;								// FPort must not be 0
+	LUP.payLength  = 9;
 	
 	// FRMPayload; Payload will be AES128 encoded using AppSKey
 	// See LoRa spec para 4.3.2
 	// You can add any byte string below based on you personal choice of sensors etc.
 	//
+	
 	// Payload bytes in this example are encoded in the LoRaCode(c) format
-	uint8_t PayLength = LoRaSensors((uint8_t *)(message+mlength));
+	uint8_t PayLength = LoRaSensors((uint8_t *)(LUP.payLoad + LUP.payLength));
+
+#if DUSB>=1
+	if ((debug>=2) && (pdebug & P_RADIO )) {
+		Serial.print(F("old: "));
+		for (int i=0; i<PayLength; i++) {
+			Serial.print(LUP.payLoad[i],HEX);
+			Serial.print(' ');
+		}
+		Serial.println();
+	}
+#endif	
 	
 	// we have to include the AES functions at this stage in order to generate LoRa Payload.
-	uint8_t CodeLength = encodePacket((uint8_t *)(message+mlength), PayLength, (uint16_t)frameCount, 0);
+	uint8_t CodeLength = encodePacket((uint8_t *)(LUP.payLoad + LUP.payLength), PayLength, (uint16_t)frameCount, DevAddr, AppSKey, 0);
 
-	mlength += CodeLength;								// length inclusive sensor data
+#if DUSB>=1
+	if ((debug>=2) && (pdebug & P_RADIO )) {
+		Serial.print(F("new: "));
+		for (int i=0; i<CodeLength; i++) {
+			Serial.print(LUP.payLoad[i],HEX);
+			Serial.print(' ');
+		}
+		Serial.println();
+	}
+#endif
+
+	LUP.payLength += CodeLength;								// length inclusive sensor data
 	
 	// MIC, Message Integrity Code
 	// As MIC is used by TTN (and others) we have to make sure that
@@ -455,15 +503,27 @@ int sensorPacket() {
 	// Note: Until MIC is done correctly, TTN does not receive these messages
 	//		 The last 4 bytes are MIC bytes.
 	//
-	mlength += micPacket((uint8_t *)(message), mlength, (uint16_t)frameCount, 0);
+	LUP.payLength += micPacket((uint8_t *)(LUP.payLoad), LUP.payLength, (uint16_t)frameCount, NwkSKey, 0);
+
+#if DUSB>=1
+	if ((debug>=2) && (pdebug & P_RADIO )) {
+		Serial.print(F("mic: "));
+		for (int i=0; i<LUP.payLength; i++) {
+			Serial.print(LUP.payLoad[i],HEX);
+			Serial.print(' ');
+		}
+		Serial.println();
+	}
+#endif
 
 	// So now our package is ready, and we can send it up through the gateway interface
 	// Note Be aware that the sensor message (which is bytes) in message will be
-	// be expanded if the server expacts JSON messages.
+	// be expanded if the server expects JSON messages.
 	//
-	int buff_index = buildPacket(tmst, buff_up, message, mlength, true);
+	int buff_index = buildPacket(tmst, buff_up, LUP, true);
 	
 	frameCount++;
+    cp_nb_rx_rcv++;	
 	
 	// In order to save the memory, we only write the framecounter
 	// to EEPROM every 10 values. It also means that we will invalidate
@@ -475,13 +535,34 @@ int sensorPacket() {
 		if (debug>0) Serial.println(F("sensorPacket:: ERROR buffer size too large"));
 		return(-1);
 	}
-	
+
+#ifdef _TTNSERVER	
 	if (!sendUdp(ttnServer, _TTNPORT, buff_up, buff_index)) {
 		return(-1);
 	}
+#endif
 #ifdef _THINGSERVER
 	if (!sendUdp(thingServer, _THINGPORT, buff_up, buff_index)) {
 		return(-1);
+	}
+#endif
+
+#if DUSB>=1
+	// If all is right, we should after decoding (which is the same as encoding) get
+	// the original message back again.
+	if ((debug>=2) && (pdebug & P_RADIO )) {
+		CodeLength = encodePacket((uint8_t *)(LUP.payLoad + 9), PayLength, (uint16_t)frameCount-1, DevAddr, AppSKey, 0);
+		Serial.print(F("rev: "));
+		for (int i=0; i<CodeLength; i++) {
+			Serial.print(LUP.payLoad[i],HEX);
+			Serial.print(' ');
+		}
+		Serial.print(F(", addr="));
+		for (int i=0; i<4; i++) {
+			Serial.print(DevAddr[i],HEX);
+			Serial.print(' ');
+		}
+		Serial.println();
 	}
 #endif
 
@@ -501,3 +582,90 @@ int sensorPacket() {
 }
 
 #endif //GATEWAYNODE==1
+
+#if (GATEWAYNODE==1) || (_LOCALSERVER==1)
+// ----------------------------------------------------------------------------
+// ENCODEPACKET
+// In Sensor mode, we have to encode the user payload before sending.
+// The same applies to decoding packages in the payload for _LOCALSERVER.
+// The library files for AES are added to the library directory in AES.
+// For the moment we use the AES library made by ideetron as this library
+// is also used in the LMIC stack and is small in size.
+//
+// The function below follows the LoRa spec exactly.
+//
+// The resulting mumber of Bytes is returned by the functions. This means
+// 16 bytes per block, and as we add to the last block we also return 16
+// bytes for the last block.
+//
+// The LMIC code does not do this, so maybe we shorten the last block to only
+// the meaningful bytes in the last block. This means that encoded buffer
+// is exactly as big as the original message.
+//
+// NOTE:: Be aware that the LICENSE of the used AES library files 
+//	that we call with AES_Encrypt() is GPL3. It is used as-is,
+//  but not part of this code.
+//
+// cmac = aes128_encrypt(K, Block_A[i])
+// ----------------------------------------------------------------------------
+uint8_t encodePacket(uint8_t *Data, uint8_t DataLength, uint16_t FrameCount, uint8_t *DevAddr, uint8_t *AppSKey, uint8_t Direction) {
+
+#if DUSB>=1
+	if (debug>=2) {
+		Serial.print(F("encodePacket:: DevAddr="));
+		for (int i=0; i<4; i++ ) { Serial.print(DevAddr[i],HEX); Serial.print(' '); }
+		Serial.print(F("encodePacket:: AppSKey="));
+		for (int i=0; i<16; i++ ) { Serial.print(AppSKey[i],HEX); Serial.print(' '); }
+		Serial.println();
+	}
+#endif
+
+	//unsigned char AppSKey[16] = _APPSKEY ;	// see ESP-sc-gway.h
+	uint8_t i, j;
+	uint8_t Block_A[16];
+	uint8_t bLen=16;						// Block length is 16 except for last block in message
+		
+	uint8_t restLength = DataLength % 16;	// We work in blocks of 16 bytes, this is the rest
+	uint8_t numBlocks  = DataLength / 16;	// Number of whole blocks to encrypt
+	if (restLength>0) numBlocks++;			// And add block for the rest if any
+
+	for(i = 1; i <= numBlocks; i++) {
+		Block_A[0] = 0x01;
+		
+		Block_A[1] = 0x00; 
+		Block_A[2] = 0x00; 
+		Block_A[3] = 0x00; 
+		Block_A[4] = 0x00;
+
+		Block_A[5] = Direction;				// 0 is uplink
+
+		Block_A[6] = DevAddr[3];			// Only works for and with ABP
+		Block_A[7] = DevAddr[2];
+		Block_A[8] = DevAddr[1];
+		Block_A[9] = DevAddr[0];
+
+		Block_A[10] = (FrameCount & 0x00FF);
+		Block_A[11] = ((FrameCount >> 8) & 0x00FF);
+		Block_A[12] = 0x00; 				// Frame counter upper Bytes
+		Block_A[13] = 0x00;					// These are not used so are 0
+
+		Block_A[14] = 0x00;
+
+		Block_A[15] = i;
+
+		// Encrypt and calculate the S
+		AES_Encrypt(Block_A, AppSKey);
+		
+		// Last block? set bLen to rest
+		if ((i == numBlocks) && (restLength>0)) bLen = restLength;
+		
+		for(j = 0; j < bLen; j++) {
+			*Data = *Data ^ Block_A[j];
+			Data++;
+		}
+	}
+	//return(numBlocks*16);			// Do we really want to return all 16 bytes in lastblock
+	return(DataLength);				// or only 16*(numBlocks-1)+bLen;
+}
+
+#endif

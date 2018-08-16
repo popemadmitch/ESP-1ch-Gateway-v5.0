@@ -1,7 +1,7 @@
 // 1-channel LoRa Gateway for ESP8266
 // Copyright (c) 2016, 2017, 2018 Maarten Westenberg version for ESP8266
-// Version 5.2.0
-// Date: 2018-05-30
+// Version 5.3.2
+// Date: 2018-07-07
 //
 // 	based on work done by Thomas Telkamp for Raspberry PI 1ch gateway
 //	and many others.
@@ -10,6 +10,8 @@
 // are made available under the terms of the MIT License
 // which accompanies this distribution, and is available at
 // https://opensource.org/licenses/mit-license.php
+//
+// NO WARRANTY OF ANY KIND IS PROVIDED
 //
 // Author: Maarten Westenberg (mw12554@hotmail.com)
 //
@@ -130,12 +132,14 @@ void stateMachine()
 				case SF11:	doneWait *= 16;	break;
 				case SF12:	doneWait *= 32;	break;
 				default:
+					doneWait *= 1;
 #if DUSB>=1
 					if (( debug>=0 ) && ( pdebug & P_PRE )) {
 						Serial.print(F("PRE:: DEF set"));
 						Serial.println();
 					}
 #endif
+					break;
 			}
 
 			// If micros is starting over again after 51 minutes 
@@ -698,7 +702,7 @@ void stateMachine()
 			if ((_cad) || (_hop)) {
 				// Set the state to CAD scanning
 #if DUSB>=1
-				if (( debug>=1 ) && ( pdebug & P_RX )) {
+				if (( debug>=2 ) && ( pdebug & P_RX )) {
 					Serial.print(F("RXTOUT:: "));
 					SerialStat(intr);
 				}
@@ -766,7 +770,6 @@ void stateMachine()
 	  
 	  // --------------------------------------------------------------  
 	  // Start te transmission of a message in state S-TX
-	  // We use S-TXDONE as the state to read the message.
 	  // This is not an interrupt state, we use this state to start transmission
 	  // the interrupt TX-DONE tells us that the transmission was successful.
 	  // It therefore is no use to set _event==1 as transmission might
@@ -774,17 +777,23 @@ void stateMachine()
 	  //
 	  case S_TX:
 	  
+		// We need a timeout for this case. In case there does not come an interrupt,
+		// then there will nog be a TXDONE but probably another CDDONE/CDDETD before
+		// we have a timeout in the main program (Keep Alive)
 		if (intr == 0x00) {
 #if DUSB>=1
-			Serial.println(F("TX:00"));
-			writeRegister(REG_IRQ_FLAGS, (uint8_t) 0xFF);				// reset interrupt flags
-			_event=0;
-			return;
+			if (( debug>=2 ) && ( pdebug & P_TX )) {
+				Serial.println(F("TX:: 0x00"));
+			}
 #endif
+			_event=1;
+			_state=S_TXDONE;
 		}
-		
-		// Sset state to transmit
+
+		// Set state to transmit
 		_state = S_TXDONE;
+		
+		// Clear interrupt flags and masks
 		writeRegister(REG_IRQ_FLAGS_MASK, (uint8_t) 0x00);
 		writeRegister(REG_IRQ_FLAGS, (uint8_t) 0xFF);					// reset interrupt flags
 		
@@ -800,14 +809,16 @@ void stateMachine()
 			LoraDown.crc,
 			LoraDown.iiq
 		);
+		// After filling the buffer we only react on TXDONE interrupt
 		
-#if DUSB>=2
-		if ( debug>=0 ) { 
-			Serial.println(F("S_TX, ")); 
+#if DUSB>=1
+		if (( debug>=1 ) && ( pdebug & P_TX )) { 
+			Serial.print(F("TX done:: ")); 
 			SerialStat(intr);
 		}
 #endif
-
+		// More or less start at the "case TXDONE:" below 
+		_state=S_TXDONE;
 		_event=1;													// Or remove the break below
 		
 	  break; // S_TX
@@ -824,8 +835,8 @@ void stateMachine()
 	  case S_TXDONE:
 		if (intr & IRQ_LORA_TXDONE_MASK) {
 #if DUSB>=1
-			if (( debug>=0 ) && ( pdebug & P_TX )) {
-				Serial.println(F("TXDONE interrupt"));
+			if (( debug>=1 ) && ( pdebug & P_TX )) {
+				Serial.println(F("TXDONE:: interrupt"));
 			}
 #endif
 			// After transmission reset to receiver
@@ -844,18 +855,18 @@ void stateMachine()
 			writeRegister(REG_IRQ_FLAGS_MASK, (uint8_t) 0x00);
 			writeRegister(REG_IRQ_FLAGS, (uint8_t) 0xFF);			// reset interrupt flags
 #if DUSB>=1
-			if (debug>=1) {
-				Serial.println(F("TXDONE handled"));
+			if (( debug>=0 ) && ( pdebug & P_TX )) {
+				Serial.println(F("TXDONE:: finished OK"));
 				if (debug>=2) Serial.flush();
 			}
 #endif
 		}
 		
 		// If a soft _event==0 interrupt and no transmission finished:
-		else {
+		else if ( intr != 0 ) {
 #if DUSB>=1
 			if (( debug>=0 ) && ( pdebug & P_TX )) {
-				Serial.print(F("TXDONE unknown int="));
+				Serial.print(F("TXDONE:: unknown int:"));
 				SerialStat(intr);
 			}
 #endif
@@ -864,7 +875,17 @@ void stateMachine()
 			_event=0;
 			_state=S_SCAN;
 		}
-		
+		// intr == 0
+		else {
+#if DUSB>=1
+			// Increase timer. If timer exceeds certain value (7 seconds!), reset
+			if (( debug>=2 ) && ( pdebug & P_TX )) {
+				Serial.println(F("TXDONE:: No Interrupt"));
+			}
+#endif
+		}
+	
+
 	  break; // S_TXDONE	  
 
 	  

@@ -1,6 +1,6 @@
 # Single Channel LoRaWAN Gateway
 
-Version 5.2.0, May 30, 2018  
+Version 5.3.2, July 07, 2018  
 Author: M. Westenberg (mw12554@hotmail.com)  
 Copyright: M. Westenberg (mw12554@hotmail.com)  
 
@@ -15,13 +15,20 @@ Maintained by Maarten Westenberg (mw12554@hotmail.com)
 
 # Description
 
-First of all: PLEASE READ THIS FILE AND THINGS4U.GITBUB.IO it should contain most of the information you need to get going.
+First of all: PLEASE READ THIS FILE AND HTTP://THINGS4U.GITHUB.IO it should contain most of the 
+information you need to get going.
 Unfortunately I do not have the time to follow up on all emails, and as most information including pin-outs 
 etc etc are contained on these pages I hope you have the time to read them before posting any questions.
 
+I do have more than 10 Wemos D1 mini boards running, some I built myself, 
+some 10+ on Hallard, 3 on ComResult and 4 ESP32 boards. They ALL work without problems
+on this code.
+I did find however that good soldering joints and wiring makes all the difference,
+so if you get resets you cannot explain, please have a second look at your wiring.
+
 This repository contains a proof-of-concept implementation of a single channel LoRaWAN gateway for the ESP8266. 
 Starting version 5.2 also the ESP32 of TTGO (and others) is supported.
-The software implements a standard LoRa gateway with the following exceptions on changes:
+The software implements a standard LoRa gateway with the following exceptions and changes:
 
 -  This LoRa gateway is not a full gateway but it implements just a one-channel/one frequency gateway. 
 The minimum amount of frequencies supported by a full gateway is 3, most support 9 or more frequencies.
@@ -386,9 +393,9 @@ The following things are still on my wish list to make to the single channel gat
 
 - Receive downstream message with commands from the server. These can be used to configure
   the gateway through downlink messages (such as setting the SF)
-- Support for ESP32 and RFM95 on 915 MHz
+- Support for ESP32 and RFM95 on 433 MHz
 - Use the SPIFFS for storing .css files
-- Use the SPIFFS for storing node data (for later analysis)
+- Look at CLass B and C support
 
 
 
